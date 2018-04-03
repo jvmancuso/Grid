@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import numbers
 
 from pathlib import Path
 
@@ -81,7 +82,7 @@ def id_tensorvar(x):
 
 # Safety checks for serializing and deserializing torch objects
 # Desperately needs stress testing before going out in the wild
-map_torch_type = {
+map_tensor_type = {
     'torch.FloatTensor':torch.FloatTensor,
     'torch.DoubleTensor':torch.DoubleTensor,
     'torch.HalfTensor':torch.HalfTensor,
@@ -90,9 +91,13 @@ map_torch_type = {
     'torch.ShortTensor':torch.ShortTensor,
     'torch.IntTensor':torch.IntTensor,
     'torch.LongTensor':torch.LongTensor,
+}
+map_var_type = {
     'torch.autograd.variable.Variable':torch.autograd.variable.Variable,
     'torch.nn.parameter.Parameter':torch.nn.parameter.Parameter
 }
+
+map_torch_type = dict(map_tensor_type, **map_var_type)
 
 
 def types_guard(obj_type):
@@ -102,7 +107,12 @@ def types_guard(obj_type):
 def tensor_contents_guard(contents):
     # TODO: check to make sure the incoming list isn't dangerous to use for
     #       constructing a tensor (likely non-trivial)
-    return contents
+    if isinstance(contents, numbers.Number):
+        return contents
+    elif contents not in content_types:
+        raise TypeError('Tried to receive a Torch object with invalid contents.')
+    else:
+        return [tensor_contents_guard(x) for x in contents]
 
 
 def command_guard(command, allowed):

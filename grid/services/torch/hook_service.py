@@ -52,11 +52,11 @@ class HookService(BaseService):
 
     def send_command(self, command, recipient):
         """Send Torch command to recipient."""
-        torch_type, registration = self.worker.request_response(
+        response = self.worker.request_response(
             channels.torch_listen_for_command_callback(recipient),
             message=command,
             response_handler=self.process_response)
-        return registration, torch_type
+        return response
 
 
     def assemble_result_pointer(self, registration, torch_type):
@@ -84,7 +84,10 @@ class HookService(BaseService):
         """Processes a worker's response from a command."""
         # TODO: Extend to responses that are iterables.
         response = utils.unpack(response)
-        return response['torch_type'], response['registration']
+        try:
+            return response['numeric']
+        except KeyError:
+            return response
 
 
     @staticmethod
@@ -185,7 +188,7 @@ class HookService(BaseService):
         accordingly.
         """
         @wraps(func)
-        def send_to_workers(*args, **kwargs):
+        def command_workers(*args, **kwargs):
             part = func(*args, **kwargs)
             command = self.compile_command(part, has_self = False)
             tensorvars = tu.get_tensorvars(self, command)
@@ -199,10 +202,18 @@ class HookService(BaseService):
                 else:
                     command = tu.replace_in_command(command)
                     for worker in owners:
+                        # only returns last pointer, since tensors will
+                        # be identical across machines for right now.
+                        # if response is numeric, returns first owner's
+                        # result
                         # TODO: extend to iterables of pointers
-                        registration, torch_type = self.send_command(command, worker)
-                        pointer = self.assemble_result_pointer(registration,
-                            torch_type)
+                        response = self.send_command(command, worker)
+                        try:
+                            pointer = self.assemble_result_pointer(
+                                response['registration'],
+                                response['torch_type'])
+                        except KeyError:
+                            return response
                     return pointer
             else:
                 result = part.func(*args, **kwargs)
@@ -210,7 +221,7 @@ class HookService(BaseService):
                     result = self.register_object(result, is_pointer=False)
                 return result
                 
-        return send_to_workers
+        return command_workers
 
 
     @staticmethod
@@ -231,7 +242,7 @@ class HookService(BaseService):
         accordingly.
         """
         @wraps(method)
-        def send_to_workers(self, *args, **kwargs):
+        def command_workers(self, *args, **kwargs):
             part = method(self, *args, **kwargs)
             if self.is_pointer:
                 command = service_self.compile_command(part, has_self=True)
@@ -240,13 +251,19 @@ class HookService(BaseService):
                 multiple_owners, owners = tu.get_owners(tensorvars)
                 if has_remote and not multiple_owners:
                     for worker in owners:
-                        command = tu.replace_in_command(command)
-                        registration, torch_type = service_self.send_command(
-                            command, worker)
                         # only returns last pointer, since tensors will
-                        # be identical across machines for right now
-                        pointer = service_self.assemble_result_pointer(
-                            registration, torch_type)
+                        # be identical across machines for right now.
+                        # if response is numeric, returns first owner's
+                        # result
+                        # TODO: extend to iterables of pointers
+                        command = tu.replace_in_command(command)
+                        response = self.send_command(command, worker)
+                        try:
+                            pointer = self.assemble_result_pointer(
+                                response['registration'],
+                                response['torch_type'])
+                        except KeyError:
+                            return response
                 else:
                     raise NotImplementedError("""MPC not yet implemented:
                         Torch objects need to be on the same machine in
@@ -259,7 +276,7 @@ class HookService(BaseService):
                     result = service_self.register_object(result,
                         is_pointer=False)
                 return result
-        return send_to_workers
+        return command_workers
 
 
     ## Special Tensor method hooks
